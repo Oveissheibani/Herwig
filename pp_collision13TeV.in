@@ -1,0 +1,39 @@
+# Load LHC default settings
+read LHC.in
+
+# Set center-of-mass energy  
+set /Herwig/Generators/EventGenerator:EventHandler:LuminosityFunction:Energy 13000.0
+
+# Random seed
+set /Herwig/Generators/EventGenerator:RandomNumberGenerator:Seed 12345
+
+# PDF setup
+cd /Herwig/Partons
+create ThePEG::LHAPDF MMHT2014LHAPDF
+set MMHT2014LHAPDF:PDFName MMHT2014lo68cl
+set MMHT2014LHAPDF:RemnantHandler /Herwig/Partons/HadronRemnants
+set /Herwig/Particles/p+:PDF /Herwig/Partons/MMHT2014LHAPDF
+set /Herwig/Particles/p+:PDF /Herwig/Partons/MMHT2014LHAPDF
+
+
+
+
+
+# Event settings
+set /Herwig/Generators/EventGenerator:NumberOfEvents 1000
+#set /Herwig/Generators/EventGenerator:PrintEvent 5000
+set /Herwig/Decays/DecayHandler:MaxLifeTime 10*mm
+
+
+
+# HepMC output (configure existing object)
+cd /Herwig/Analysis
+set /Herwig/Analysis/HepMCFile:Filename events.hepmc
+set /Herwig/Analysis/HepMCFile:Format GenEvent
+set /Herwig/Analysis/HepMCFile:Units GeV_mm
+set /Herwig/Analysis/HepMCFile:PrintEvent 1000
+insert /Herwig/Generators/EventGenerator:AnalysisHandlers 0 /Herwig/Analysis/HepMCFile
+
+
+# Save and run
+saverun pp13TeV_basic_run /Herwig/Generators/EventGenerator
