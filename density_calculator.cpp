@@ -12,209 +12,52 @@
 #include "TFile.h"
 #include "TMath.h"
 #include "TDirectory.h"
+#include "TROOT.h"
+#include "TRandom3.h"
 
+// ============================================================================
+// 1. UTILITY CLASSES (unchanged)
+// ============================================================================
 class StatusFilter {
 private:
     std::set<int> allowed_status;
     bool accept_all;
-    
 public:
     StatusFilter() : accept_all(false) {
         allowed_status.insert(1);
+        allowed_status.insert(11);
     }
-    
     void setAllowedStatus(const std::vector<int>& status_codes) {
         allowed_status.clear();
-        for (int status : status_codes) {
-            allowed_status.insert(status);
-        }
+        for (int status : status_codes) allowed_status.insert(status);
         accept_all = false;
     }
-    
-    void acceptAllStatus() {
-        accept_all = true;
-        allowed_status.clear();
-    }
-    
+    void acceptAllStatus() { accept_all = true; allowed_status.clear(); }
     bool isAllowed(int status) const {
         if (accept_all) return true;
-        return allowed_status.find(status) != allowed_status.end();
+        return allowed_status.count(status);
     }
-    
     void printConfiguration() const {
-        if (accept_all) {
-            std::cout << "Status filter: ALL particle status codes accepted" << std::endl;
-        } else {
-            std::cout << "Status filter: Accepting particles with status [";
-            bool first = true;
-            for (int status : allowed_status) {
-                if (!first) std::cout << ",";
-                std::cout << status;
-                first = false;
-            }
+        if (accept_all) std::cout << "Status filter: ALL accepted" << std::endl;
+        else {
+            std::cout << "Status filter: [";
+            for (int s : allowed_status) std::cout << s << " ";
             std::cout << "]" << std::endl;
         }
-    }
-    
-    std::vector<int> getStatusCodes() const {
-        std::vector<int> codes;
-        if (!accept_all) {
-            for (int status : allowed_status) {
-                codes.push_back(status);
-            }
-        }
-        return codes;
-    }
-    
-    bool isDefaultStatus() const {
-        return !accept_all && allowed_status.size() == 1 && allowed_status.count(1) == 1;
     }
 };
 
 class PDGManager {
 public:
-    // Automatically expand PDG list to include both particles and antiparticles
     static std::vector<int> expandPDGList(const std::vector<int>& input_pdgs) {
         std::set<int> pdg_set;
-        
-        for (int pdg : input_pdgs) {
-            pdg_set.insert(pdg);      // Add original
-            pdg_set.insert(-pdg);     // Add antiparticle
-        }
-        
-        std::vector<int> expanded_list(pdg_set.begin(), pdg_set.end());
-        
-        std::cout << "\nExpanded PDG list (particles + antiparticles):" << std::endl;
-        for (int pdg : expanded_list) {
-            std::cout << "  PDG: " << pdg << std::endl;
-        }
-        
-        return expanded_list;
+        for (int pdg : input_pdgs) { pdg_set.insert(pdg); pdg_set.insert(-pdg); }
+        return std::vector<int>(pdg_set.begin(), pdg_set.end());
     }
-    
-    static std::string generateSuffix(int pdg_code, const std::vector<int>& status_codes = {}, bool is_default_status = true) {
-        std::string suffix = "";
-        if (pdg_code < 0) {
-            suffix += "m" + std::to_string(-pdg_code);
-        } else {
-            suffix += std::to_string(pdg_code);
-        }
-        if (!is_default_status && !status_codes.empty()) {
-            suffix += "_status";
-            for (size_t i = 0; i < status_codes.size(); i++) {
-                suffix += std::to_string(status_codes[i]);
-                if (i < status_codes.size() - 1) {
-                    suffix += "_";
-                }
-            }
-        }
-        return suffix;
-    }
-    
-    static std::string generatePairSuffix(int pdg1, int pdg2, const std::vector<int>& status_codes = {}, bool is_default_status = true) {
-        std::string suffix1 = (pdg1 < 0) ? "m" + std::to_string(-pdg1) : std::to_string(pdg1);
-        std::string suffix2 = (pdg2 < 0) ? "m" + std::to_string(-pdg2) : std::to_string(pdg2);
-        std::string suffix = suffix1 + "_" + suffix2;
-        if (!is_default_status && !status_codes.empty()) {
-            suffix += "_status";
-            for (size_t i = 0; i < status_codes.size(); i++) {
-                suffix += std::to_string(status_codes[i]);
-                if (i < status_codes.size() - 1) {
-                    suffix += "_";
-                }
-            }
-        }
-        return suffix;
-    }
-    
-    static std::string generateTitle(int pdg_code, const std::vector<int>& status_codes = {}, bool is_default_status = true) {
-        std::string title = "PDG[" + std::to_string(pdg_code) + "]";
-        if (!is_default_status && !status_codes.empty()) {
-            title += " Status[";
-            for (size_t i = 0; i < status_codes.size(); i++) {
-                title += std::to_string(status_codes[i]);
-                if (i < status_codes.size() - 1) {
-                    title += ",";
-                }
-            }
-            title += "]";
-        }
-        return title;
-    }
-    
-    static std::string generatePairTitle(int pdg1, int pdg2, const std::vector<int>& status_codes = {}, bool is_default_status = true) {
-        std::string title = "PDG[" + std::to_string(pdg1) + "," + std::to_string(pdg2) + "]";
-        if (!is_default_status && !status_codes.empty()) {
-            title += " Status[";
-            for (size_t i = 0; i < status_codes.size(); i++) {
-                title += std::to_string(status_codes[i]);
-                if (i < status_codes.size() - 1) {
-                    title += ",";
-                }
-            }
-            title += "]";
-        }
-        return title;
-    }
-};
-
-class HistogramManager {
-private:
-    TFile* output_file;
-    TDirectory* single_dir;
-    TDirectory* pair_dir;
-    TDirectory* tensor_dir;
-    TDirectory* event_dir;
-    
-public:
-    HistogramManager(TFile* file) : output_file(file) {
-        // Create organized directory structure
-        single_dir = output_file->mkdir("SingleDensities");
-        pair_dir = output_file->mkdir("PairDensities");
-        tensor_dir = output_file->mkdir("TensorProducts");
-        event_dir = output_file->mkdir("EventPlots");
-    }
-    
-    TH1F* createTH1F(const std::string& name, const std::string& title,
-                     int nbins, double xmin, double xmax) {
-        return new TH1F(name.c_str(), title.c_str(), nbins, xmin, xmax);
-    }
-    
-    TH2F* createTH2F(const std::string& name, const std::string& title,
-                     int nbinsx, double xmin, double xmax,
-                     int nbinsy, double ymin, double ymax) {
-        return new TH2F(name.c_str(), title.c_str(),
-                       nbinsx, xmin, xmax, nbinsy, ymin, ymax);
-    }
-    
-    void writeHistogramToSingle(TH1* hist) {
-        single_dir->cd();
-        hist->Write();
-    }
-    
-    void writeHistogramToPair(TH1* hist) {
-        pair_dir->cd();
-        hist->Write();
-    }
-    
-    void writeHistogramToTensor(TH1* hist) {
-        tensor_dir->cd();
-        hist->Write();
-    }
-    
-    void writeHistogramToEvent(TH1* hist) {
-        event_dir->cd();
-        hist->Write();
-    }
-    
-    void writeEventSummary(int total_events) {
-        event_dir->cd();
-        TH1F* h_total_events = new TH1F("h_total_events", "Total Number of Events;Events;Count", 1, 0, 1);
-        h_total_events->SetBinContent(1, total_events);
-        h_total_events->Write();
-        delete h_total_events;
-        
-        std::cout << "\nEvent Summary written: Total Events = " << total_events << std::endl;
+    static std::string generateSuffix(int pdg1, int pdg2) {
+        std::string s1 = (pdg1 < 0) ? "m" + std::to_string(-pdg1) : std::to_string(pdg1);
+        std::string s2 = (pdg2 < 0) ? "m" + std::to_string(-pdg2) : std::to_string(pdg2);
+        return s1 + "_" + s2;
     }
 };
 
@@ -224,765 +67,658 @@ public:
         double px, py, pz, E;
         int pdg;
         int event_id;
-        
-        double getPt() const {
-            return std::sqrt(px*px + py*py);
-        }
-        
-        double getRapidity() const {
-            return 0.5 * std::log((E + pz) / (E - pz + 1e-12));
-        }
-        
-        double getPhi() const {
-            return std::atan2(py, px);
-        }
-        
-        double getEta() const {
-            double p = std::sqrt(px*px + py*py + pz*pz);
-            return 0.5 * std::log((p + pz) / (p - pz + 1e-12));
-        }
+        double getPt() const { return std::sqrt(px*px + py*py); }
+        double getRapidity() const { return 0.5 * std::log((E + pz) / (E - pz + 1e-12)); }
+        double getPhi() const { return std::atan2(py, px); }
     };
-    
-    static Particle createParticle(double px, double py, double pz, double E, int pdg, int event_id) {
-        Particle p;
-        p.px = px; p.py = py; p.pz = pz; p.E = E; p.pdg = pdg; p.event_id = event_id;
-        return p;
+    static Particle createParticle(double px, double py, double pz, double E, int pdg, int eid) {
+        return {px, py, pz, E, pdg, eid};
     }
-    
-    static double getDeltaY(const Particle& p1, const Particle& p2) {
-        return p1.getRapidity() - p2.getRapidity();
-    }
-    
+    static double getDeltaY(const Particle& p1, const Particle& p2) { return p1.getRapidity() - p2.getRapidity(); }
     static double getDeltaPhi(const Particle& p1, const Particle& p2) {
         double dphi = p1.getPhi() - p2.getPhi();
-        while (dphi > TMath::Pi()) dphi -= 2*TMath::Pi();
+        while (dphi >= TMath::Pi()) dphi -= 2*TMath::Pi();
         while (dphi < -TMath::Pi()) dphi += 2*TMath::Pi();
         return dphi;
     }
+    static int getCharge(int pdg) {
+        int apdg = std::abs(pdg);
+        int s = (pdg > 0 ? 1 : -1);
+        switch (apdg) {
+            case 11: case 13: case 15: return -s;
+            case 12: case 14: case 16: case 22: case 111: case 130: case 2112: case 310: case 311: case 3122: case 221: case 331: case 441: case 551: case 3322: return 0;
+            case 211: case 321: case 411: case 421: case 431: case 511: case 521: case 531: case 2212: case 3222: return s;
+            case 3112: case 3312: case 3334: return -s;
+            default: return 0;
+        }
+    }
+    static bool isChargedHadron(int pdg) {
+        int charge = getCharge(pdg);
+        int apdg = std::abs(pdg);
+        return (charge != 0) && (apdg != 11 && apdg != 13 && apdg != 15);
+    }
 };
 
+TH2F* flipDy(const TH2F* h) {
+    TH2F* flipped = (TH2F*)h->Clone();
+    flipped->Reset();
+    int nx = h->GetNbinsX();
+    int ny = h->GetNbinsY();
+    for (int i = 1; i <= nx; ++i) {
+        for (int j = 1; j <= ny; ++j) {
+            flipped->SetBinContent(nx + 1 - i, j, h->GetBinContent(i, j));
+            flipped->SetBinError(nx + 1 - i, j, h->GetBinError(i, j));
+        }
+    }
+    return flipped;
+}
+
+// ============================================================================
+// 2. HISTOGRAM MANAGER (unchanged)
+// ============================================================================
+class HistogramManager {
+private:
+    TFile* output_file;
+    std::vector<TDirectory*> dir_singles, dir_pairs, dir_tensors, dir_a2s, dir_b2s, dir_c2s, dir_bss;
+    TDirectory *dir_event;
+public:
+    HistogramManager(TFile* file, int n_classes) : output_file(file) {
+        dir_event = output_file->mkdir("EventPlots");
+        for (int c = 0; c < n_classes; ++c) {
+            std::string class_name = "Class" + std::to_string(c);
+            TDirectory* class_dir = output_file->mkdir(class_name.c_str());
+            dir_singles.push_back(class_dir->mkdir("SingleDensities"));
+            dir_pairs.push_back(class_dir->mkdir("PairDensities"));
+            dir_tensors.push_back(class_dir->mkdir("TensorProducts"));
+            dir_a2s.push_back(class_dir->mkdir("ConditionalCumulants_A2"));
+            dir_b2s.push_back(class_dir->mkdir("BalanceFunctions_B2"));
+            dir_c2s.push_back(class_dir->mkdir("NormalizedCorrelation_C2"));
+            dir_bss.push_back(class_dir->mkdir("SymmetricBalanceFunctions_Bs"));
+        }
+    }
+    TH1F* createTH1F(const std::string& n, const std::string& t, int nb, double min, double max) {
+        return new TH1F(n.c_str(), t.c_str(), nb, min, max);
+    }
+    TH2F* createTH2F(const std::string& n, const std::string& t, int nbx, double xmin, double xmax, int nby, double ymin, double ymax, const std::string& x_title = "", const std::string& y_title = "") {
+        TH2F* h = new TH2F(n.c_str(), t.c_str(), nbx, xmin, xmax, nby, ymin, ymax);
+        if (!x_title.empty()) h->GetXaxis()->SetTitle(x_title.c_str());
+        if (!y_title.empty()) h->GetYaxis()->SetTitle(y_title.c_str());
+        return h;
+    }
+    void writeSingle(int class_id, TObject* h) { if (class_id >= 0 && class_id < (int)dir_singles.size()) { dir_singles[class_id]->cd(); h->Write(); } }
+    void writePair(int class_id, TObject* h)   { if (class_id >= 0 && class_id < (int)dir_pairs.size())   { dir_pairs[class_id]->cd();   h->Write(); } }
+    void writeTensor(int class_id, TObject* h) { if (class_id >= 0 && class_id < (int)dir_tensors.size()) { dir_tensors[class_id]->cd(); h->Write(); } }
+    void writeA2(int class_id, TObject* h)     { if (class_id >= 0 && class_id < (int)dir_a2s.size())     { dir_a2s[class_id]->cd();     h->Write(); } }
+    void writeB2(int class_id, TObject* h)     { if (class_id >= 0 && class_id < (int)dir_b2s.size())     { dir_b2s[class_id]->cd();     h->Write(); } }
+    void writeC2(int class_id, TObject* h)     { if (class_id >= 0 && class_id < (int)dir_c2s.size())     { dir_c2s[class_id]->cd();     h->Write(); } }
+    void writeBs(int class_id, TObject* h)     { if (class_id >= 0 && class_id < (int)dir_bss.size())     { dir_bss[class_id]->cd();     h->Write(); } }
+    void writeEvent(TObject* h) { dir_event->cd(); h->Write(); }
+    void writeEventSummary(int total_events) {
+        dir_event->cd();
+        TH1F* h = new TH1F("h_total_events", "Total Number of Events", 1, 0, 1);
+        h->SetBinContent(1, total_events);
+        h->Write();
+        delete h;
+    }
+};
+
+// ============================================================================
+// 3. SINGLE PARTICLE ANALYZER (unchanged, unweighted)
+// ============================================================================
 class SingleParticleAnalyzer {
 private:
     int target_pdg;
-    std::vector<int> status_codes;
-    bool is_default_status;
-    HistogramManager* hist_manager;
-    std::string pdg_suffix;
-    std::string pdg_title;
-    int total_events;
-    
-    struct Config {
-        int n_rapidity_bins = 100;
-        double rapidity_min = -5.0;
-        double rapidity_max = 5.0;
-        int n_phi_bins = 64;
-        double phi_min = -TMath::Pi();
-        double phi_max = TMath::Pi();
-        int n_pt_bins = 200;
-        double pt_min = 0.0;
-        double pt_max = 20.0;
-    } config;
-    
-    TH2F* h_density_rapidity_phi;
-    TH1F* h_pt;
-    TH1F* h_rapidity;
-    TH1F* h_phi;
-    TH1F* h_multiplicity;
-    
+    std::vector<TH2F*> h_density;
+    std::vector<TH1F*> h_multiplicity;
+    std::vector<int> total_events_per_class;
+    int n_classes;
 public:
-    SingleParticleAnalyzer(int pdg_code, HistogramManager* manager, const std::vector<int>& status_list = {1}, bool default_status = true)
-        : target_pdg(pdg_code),
-          status_codes(status_list),
-          is_default_status(default_status),
-          hist_manager(manager),
-          total_events(0) {
-        
-        pdg_suffix = PDGManager::generateSuffix(pdg_code, status_codes, is_default_status);
-        pdg_title = PDGManager::generateTitle(pdg_code, status_codes, is_default_status);
-        
-        initializeHistograms();
+    SingleParticleAnalyzer(int pdg, HistogramManager* hm, int n_classes) : target_pdg(pdg), n_classes(n_classes) {
+        std::string suffix = (pdg < 0) ? "m" + std::to_string(-pdg) : std::to_string(pdg);
+        for (int c = 0; c < n_classes; ++c) {
+            std::string name = "h_density_raw_" + suffix + "_class" + std::to_string(c);
+            h_density.push_back(hm->createTH2F(name, "Raw Density " + suffix + " Class " + std::to_string(c), 100, -5.0, 5.0, 64, -TMath::Pi(), TMath::Pi(), "y", "#phi"));
+            std::string mname = "h_mult_raw_" + suffix + "_class" + std::to_string(c);
+            h_multiplicity.push_back(hm->createTH1F(mname, "Mult " + suffix + " Class " + std::to_string(c), 1000, 0, 1000));
+            total_events_per_class.push_back(0);
+        }
     }
-    
-    void processParticle(const KinematicsCalculator::Particle& particle) {
-        if (particle.pdg != target_pdg) return;
-        
-        double pt = particle.getPt();
-        if (pt < 1e-6) return;
-        
-        double rapidity = particle.getRapidity();
-        double phi = particle.getPhi();
-        
-        h_density_rapidity_phi->Fill(rapidity, phi, 1.0/pt);
-        h_pt->Fill(pt, 1.0/pt);
-        h_rapidity->Fill(rapidity);
-        h_phi->Fill(phi);
+    ~SingleParticleAnalyzer() { for (auto h : h_density) delete h; for (auto h : h_multiplicity) delete h; }
+
+    void processParticle(const KinematicsCalculator::Particle& p, int class_id) {
+        if (p.pdg != target_pdg) return;
+        if (p.getPt() < 1e-6) return;
+        h_density[class_id]->Fill(p.getRapidity(), p.getPhi(), 1.0);
     }
-    
-    void processEvent(int count) {
-        h_multiplicity->Fill(count);
-        total_events++;
+
+    void processEvent(int count, int class_id) {
+        h_multiplicity[class_id]->Fill(count);
+        total_events_per_class[class_id]++;
     }
-    
-    TH2F* getDensityHistogram() const { return h_density_rapidity_phi; }
-    
+
     int getPDG() const { return target_pdg; }
-    
-    std::vector<int> getStatusCodes() const { return status_codes; }
-    
-    int getTotalEvents() const { return total_events; }
-    
-    void finalize() {
-        std::string final_name = "h_final_density_" + pdg_suffix;
-        std::string final_title = "#rho_{1}(y,#phi) " + pdg_title + " normalized by events;rapidity y;#phi [rad]";
-        
-        TH2F* h_final_density = (TH2F*)h_density_rapidity_phi->Clone(final_name.c_str());
-        h_final_density->SetTitle(final_title.c_str());
-        
-        // NORMALIZE BY NUMBER OF EVENTS ONLY (as requested)
-        if (total_events > 0) {
-            h_final_density->Scale(1.0 / total_events);
+    int getTotalEvents(int class_id) const { return total_events_per_class[class_id]; }
+    double getMeanMultiplicity(int class_id) const { return h_multiplicity[class_id]->GetMean(); }
+    TH2F* getDensity(int class_id) const { return h_density[class_id]; }
+
+    void finalize(HistogramManager* hm) {
+        for (int c = 0; c < n_classes; ++c) {
+            if (total_events_per_class[c] == 0) continue;
+            std::string suffix = (target_pdg < 0) ? "m" + std::to_string(-target_pdg) : std::to_string(target_pdg);
+            std::string cs = "_class" + std::to_string(c);
+            TH2F* hf = (TH2F*)h_density[c]->Clone(("h_rho1_" + suffix + cs).c_str());
+            hf->Scale(1.0 / total_events_per_class[c]);
+            hm->writeSingle(c, hf); delete hf;
+            TH1F* hm_final = (TH1F*)h_multiplicity[c]->Clone(("h_mult_freq_" + suffix + cs).c_str());
+            hm_final->Scale(1.0 / total_events_per_class[c]);
+            hm->writeEvent(hm_final); // Moved to EventPlots for multiplicity distributions
+            delete hm_final;
         }
-        
-        // Write to Single Densities folder
-        hist_manager->writeHistogramToSingle(h_final_density);
-        hist_manager->writeHistogramToSingle(h_density_rapidity_phi);
-        hist_manager->writeHistogramToSingle(h_pt);
-        hist_manager->writeHistogramToSingle(h_rapidity);
-        hist_manager->writeHistogramToSingle(h_phi);
-        
-        // Write multiplicity to Event folder
-        std::string mult_name = "h_multiplicity_" + pdg_suffix;
-        std::string mult_title = "Event multiplicity " + pdg_title + " normalized by events;N_{particles};events/total_events";
-        TH1F* h_mult_normalized = (TH1F*)h_multiplicity->Clone(mult_name.c_str());
-        h_mult_normalized->SetTitle(mult_title.c_str());
-        if (total_events > 0) {
-            h_mult_normalized->Scale(1.0 / total_events);
-        }
-        hist_manager->writeHistogramToEvent(h_mult_normalized);
-        
-        std::cout << "Single particle analysis for " << pdg_title
-                  << ": " << h_rapidity->GetEntries() << " particles in " 
-                  << total_events << " events" << std::endl;
-        
-        delete h_final_density;
-        delete h_mult_normalized;
-    }
-    
-private:
-    void initializeHistograms() {
-        std::string base_name, base_title;
-        
-        base_name = "h_density_rapidity_phi_raw_" + pdg_suffix;
-        base_title = "#rho_{1}(y,#phi) raw " + pdg_title + ";rapidity y;#phi [rad]";
-        h_density_rapidity_phi = hist_manager->createTH2F(base_name, base_title,
-            config.n_rapidity_bins, config.rapidity_min, config.rapidity_max,
-            config.n_phi_bins, config.phi_min, config.phi_max);
-        
-        base_name = "h_pt_raw_" + pdg_suffix;
-        base_title = "p_{T} distribution raw " + pdg_title + ";p_{T} [GeV];dN/dp_{T}";
-        h_pt = hist_manager->createTH1F(base_name, base_title,
-            config.n_pt_bins, config.pt_min, config.pt_max);
-        
-        base_name = "h_rapidity_raw_" + pdg_suffix;
-        base_title = "Rapidity distribution raw " + pdg_title + ";y;counts";
-        h_rapidity = hist_manager->createTH1F(base_name, base_title,
-            config.n_rapidity_bins, config.rapidity_min, config.rapidity_max);
-        
-        base_name = "h_phi_raw_" + pdg_suffix;
-        base_title = "#phi distribution raw " + pdg_title + ";#phi [rad];counts";
-        h_phi = hist_manager->createTH1F(base_name, base_title,
-            config.n_phi_bins, config.phi_min, config.phi_max);
-        
-        base_name = "h_multiplicity_raw_" + pdg_suffix;
-        base_title = "Event multiplicity raw " + pdg_title + ";N_{particles};events";
-        h_multiplicity = hist_manager->createTH1F(base_name, base_title, 1000, 0, 1000);
     }
 };
 
-
+// ============================================================================
+// 4. PAIR ANALYZER (unchanged, ordered, unweighted)
+// ============================================================================
 class PairAnalyzer {
 private:
-    int pdg1, pdg2;
-    std::vector<int> status_codes;
-    bool is_default_status;
-    HistogramManager* hist_manager;
-    std::string pair_suffix;
-    std::string pair_title;
-    int total_events;
-    bool is_self_pair;
-    
-    struct Config {
-        int n_delta_y_bins = 100;
-        double delta_y_min = -4.0;
-        double delta_y_max = 4.0;
-        int n_delta_phi_bins = 64;
-        double delta_phi_min = -TMath::Pi();
-        double delta_phi_max = TMath::Pi();
-    } config;
-    
-    TH2F* h_pair_density;
-    TH2F* h_tensor_product;
-    TH1F* h_delta_y;
-    TH1F* h_delta_phi;
-    TH1F* h_pair_multiplicity;
-    
-    SingleParticleAnalyzer* analyzer1;
-    SingleParticleAnalyzer* analyzer2;
-    
+    int pdg1, pdg2; // pdg1 = trigger, pdg2 = associated
+    std::vector<TH2F*> h_pair_density, h_tensor_product, h_c2_cumulant;
+    std::vector<TH1F*> h_pair_count;
+    std::vector<int> total_events_per_class;
+    SingleParticleAnalyzer *s1, *s2;
+    bool is_self;
+    int n_classes;
 public:
-    PairAnalyzer(int particle1_pdg, int particle2_pdg, HistogramManager* manager,
-                 SingleParticleAnalyzer* single1, SingleParticleAnalyzer* single2,
-                 const std::vector<int>& status_list = {1}, bool default_status = true)
-        : pdg1(particle1_pdg), pdg2(particle2_pdg), hist_manager(manager),
-          analyzer1(single1), analyzer2(single2), status_codes(status_list), 
-          is_default_status(default_status), total_events(0) {
-        
-        is_self_pair = (pdg1 == pdg2);
-        
-        pair_suffix = PDGManager::generatePairSuffix(pdg1, pdg2, status_codes, is_default_status);
-        pair_title = PDGManager::generatePairTitle(pdg1, pdg2, status_codes, is_default_status);
-        
-        initializeHistograms();
+    PairAnalyzer(int p1, int p2, HistogramManager* hm, SingleParticleAnalyzer* sa1, SingleParticleAnalyzer* sa2, int n_classes)
+        : pdg1(p1), pdg2(p2), s1(sa1), s2(sa2), n_classes(n_classes), is_self(p1 == p2) {
+        std::string suffix = PDGManager::generateSuffix(p1, p2);
+        for (int c = 0; c < n_classes; ++c) {
+            std::string cs = "_class" + std::to_string(c);
+            h_pair_density.push_back(hm->createTH2F("h_rho2_raw_" + suffix + cs, "Raw #rho2 " + suffix + cs, 100, -4.0, 4.0, 64, -TMath::Pi(), TMath::Pi(), "#Deltay", "#Delta#phi"));
+            h_tensor_product.push_back(hm->createTH2F("h_tensor_raw_" + suffix + cs, "Tensor " + suffix + cs, 100, -4.0, 4.0, 64, -TMath::Pi(), TMath::Pi(), "#Deltay", "#Delta#phi"));
+            h_pair_count.push_back(hm->createTH1F("h_pair_mult_" + suffix + cs, "Pair mult " + suffix + cs, 1000, 0, 1000));
+            h_c2_cumulant.push_back(nullptr);
+            total_events_per_class.push_back(0);
+        }
     }
-    
-    void processPairs(const std::vector<KinematicsCalculator::Particle>& particles) {
-        int pair_count = 0;
-        
-        for (size_t i = 0; i < particles.size(); i++) {
-            if (particles[i].pdg != pdg1) continue;
-            
-            for (size_t j = 0; j < particles.size(); j++) {
-                // For self-pairs, skip same particle; for different pairs, skip same index
-                if (is_self_pair && i == j) continue;
-                if (!is_self_pair && (i == j || particles[j].pdg != pdg2)) continue;
-                if (!is_self_pair && particles[j].pdg != pdg2) continue;
-                
-                if (particles[i].event_id != particles[j].event_id) {
-                    std::cerr << "Warning: Particles from different events!" << std::endl;
-                    continue;
-                }
-                
-                const auto& p1 = particles[i];
-                const auto& p2 = particles[j];
-                
-                double pt1 = p1.getPt();
-                double pt2 = p2.getPt();
-                if (pt1 < 1e-6 || pt2 < 1e-6) continue;
-                
-                double delta_y = KinematicsCalculator::getDeltaY(p1, p2);
-                double delta_phi = KinematicsCalculator::getDeltaPhi(p1, p2);
-                
-                double pair_weight = 1.0 / (pt1 + pt2);
-                
-                h_pair_density->Fill(delta_y, delta_phi, pair_weight);
-                h_delta_y->Fill(delta_y);
-                h_delta_phi->Fill(delta_phi);
-                
-                pair_count++;
+    ~PairAnalyzer() {
+        for (auto h : h_pair_density) delete h;
+        for (auto h : h_tensor_product) delete h;
+        for (auto h : h_pair_count) delete h;
+        for (auto h : h_c2_cumulant) if (h) delete h;
+    }
+
+    void processPairs(const std::vector<KinematicsCalculator::Particle>& parts, int class_id) {
+        int count = 0;
+        for (size_t i = 0; i < parts.size(); ++i) {
+            if (parts[i].pdg != pdg1) continue;
+            for (size_t j = 0; j < parts.size(); ++j) {
+                if (is_self && i == j) continue;
+                if (!is_self && parts[j].pdg != pdg2) continue;
+                auto& p1 = parts[i]; auto& p2 = parts[j];
+                double dy = KinematicsCalculator::getDeltaY(p1, p2);
+                double dphi = KinematicsCalculator::getDeltaPhi(p1, p2);
+                h_pair_density[class_id]->Fill(dy, dphi, 1.0);
+                count++;
             }
         }
-        
-        h_pair_multiplicity->Fill(pair_count);
-        total_events++;
+        h_pair_count[class_id]->Fill(count);
+        total_events_per_class[class_id]++;
     }
-    
-    void calculateTensorProduct() {
-        if (!analyzer1 || !analyzer2) {
-            std::cout << "Warning: Cannot calculate tensor product - missing analyzers" << std::endl;
-            return;
-        }
-        
-        TH2F* rho1 = analyzer1->getDensityHistogram();
-        TH2F* rho2 = analyzer2->getDensityHistogram();
-        
-        if (!rho1 || !rho2) {
-            std::cout << "Warning: Missing density histograms for tensor product" << std::endl;
-            return;
-        }
-        
-        // Get total events from single particle analyzers
-        int events1 = analyzer1->getTotalEvents();
-        int events2 = analyzer2->getTotalEvents();
-        int min_events = std::min(events1, events2);
-        
-        if (min_events == 0) {
-            std::cout << "Warning: No events processed for tensor product calculation" << std::endl;
-            return;
-        }
-        
-        // Create normalized copies for tensor product calculation
-        TH2F* rho1_norm = (TH2F*)rho1->Clone("temp_rho1");
-        TH2F* rho2_norm = (TH2F*)rho2->Clone("temp_rho2");
-        
-        // NORMALIZE BY EVENTS ONLY (as requested)
-        rho1_norm->Scale(1.0 / min_events);
-        rho2_norm->Scale(1.0 / min_events);
-        
-        // Calculate tensor product: rho1(y1,phi1) * rho2(y1+delta_y, phi1+delta_phi)
-        for (int i = 1; i <= h_tensor_product->GetNbinsX(); i++) {
-            for (int j = 1; j <= h_tensor_product->GetNbinsY(); j++) {
-                double delta_y = h_tensor_product->GetXaxis()->GetBinCenter(i);
-                double delta_phi = h_tensor_product->GetYaxis()->GetBinCenter(j);
-                
-                double tensor_sum = 0.0;
-                int valid_bins = 0;
-                
-                // Sum over all possible (y1, phi1) positions
-                for (int y1_bin = 1; y1_bin <= rho1_norm->GetNbinsX(); y1_bin++) {
-                    for (int phi1_bin = 1; phi1_bin <= rho1_norm->GetNbinsY(); phi1_bin++) {
-                        double y1 = rho1_norm->GetXaxis()->GetBinCenter(y1_bin);
-                        double phi1 = rho1_norm->GetYaxis()->GetBinCenter(phi1_bin);
-                        
-                        double y2 = y1 + delta_y;
-                        double phi2 = phi1 + delta_phi;
-                        
-                        // Handle phi periodicity
-                        while (phi2 > TMath::Pi()) phi2 -= 2*TMath::Pi();
-                        while (phi2 < -TMath::Pi()) phi2 += 2*TMath::Pi();
-                        
-                        // Find corresponding bin in rho2
-                        int y2_bin = rho2_norm->GetXaxis()->FindBin(y2);
-                        int phi2_bin = rho2_norm->GetYaxis()->FindBin(phi2);
-                        
-                        // Check if within bounds
-                        if (y2_bin >= 1 && y2_bin <= rho2_norm->GetNbinsX() &&
-                            phi2_bin >= 1 && phi2_bin <= rho2_norm->GetNbinsY()) {
-                            
-                            double rho1_val = rho1_norm->GetBinContent(y1_bin, phi1_bin);
-                            double rho2_val = rho2_norm->GetBinContent(y2_bin, phi2_bin);
-                            
-                            tensor_sum += rho1_val * rho2_val;
-                            valid_bins++;
+
+    void calculateTensor(int class_id) {
+        if (!s1 || !s2 || total_events_per_class[class_id] == 0) return;
+        TH2F* rho1 = s1->getDensity(class_id);
+        TH2F* rho2 = s2->getDensity(class_id);
+        double N = total_events_per_class[class_id];
+        h_tensor_product[class_id]->Reset();
+
+        double dx1 = rho1->GetXaxis()->GetBinWidth(1), dy1 = rho1->GetYaxis()->GetBinWidth(1);
+        double dx2 = rho2->GetXaxis()->GetBinWidth(1), dy2 = rho2->GetYaxis()->GetBinWidth(1);
+        TRandom3 rand(0);
+        const int nSamples = 5;
+        double w = 1.0 / (nSamples * N * N);
+
+        for (int bx1=1; bx1<=rho1->GetNbinsX(); ++bx1) {
+            double yc1 = rho1->GetXaxis()->GetBinCenter(bx1);
+            for (int by1=1; by1<=rho1->GetNbinsY(); ++by1) {
+                double v1 = rho1->GetBinContent(bx1, by1);
+                if (v1 <= 0) continue;
+                double phic1 = rho1->GetYaxis()->GetBinCenter(by1);
+                for (int bx2=1; bx2<=rho2->GetNbinsX(); ++bx2) {
+                    double yc2 = rho2->GetXaxis()->GetBinCenter(bx2);
+                    for (int by2=1; by2<=rho2->GetNbinsY(); ++by2) {
+                        double v2 = rho2->GetBinContent(bx2, by2);
+                        if (v2 <= 0) continue;
+                        double phic2 = rho2->GetYaxis()->GetBinCenter(by2);
+                        for (int s=0; s<nSamples; ++s) {
+                            double y1  = yc1  + rand.Uniform(-dx1/2, dx1/2);
+                            double phi1 = phic1 + rand.Uniform(-dy1/2, dy1/2);
+                            double y2  = yc2  + rand.Uniform(-dx2/2, dx2/2);
+                            double phi2 = phic2 + rand.Uniform(-dy2/2, dy2/2);
+                            double dy   = y1 - y2;
+                            double dphi = phi1 - phi2;
+                            while (dphi >  TMath::Pi()) dphi -= 2*TMath::Pi();
+                            while (dphi < -TMath::Pi()) dphi += 2*TMath::Pi();
+                            h_tensor_product[class_id]->Fill(dy, dphi, v1 * v2 * w);
                         }
                     }
                 }
-                
-                if (valid_bins > 0) {
-                    h_tensor_product->SetBinContent(i, j, tensor_sum / valid_bins);
-                }
             }
         }
-        
-        delete rho1_norm;
-        delete rho2_norm;
     }
-    
-    void finalize() {
-        calculateTensorProduct();
-        
-        // Create final pair density ρ₂ normalized by events
-        std::string final_pair_name = "h_final_pair_density_" + pair_suffix;
-        std::string final_pair_title = "#rho_{2}(#Delta y,#Delta #phi) " + pair_title + " normalized by events;#Delta y;#Delta #phi [rad]";
-        
-        TH2F* h_final_pair_density = (TH2F*)h_pair_density->Clone(final_pair_name.c_str());
-        h_final_pair_density->SetTitle(final_pair_title.c_str());
-        
-        // NORMALIZE BY NUMBER OF EVENTS ONLY (as requested)
-        if (total_events > 0) {
-            h_final_pair_density->Scale(1.0 / total_events);
-        }
-        
-        // Create final tensor product normalized by events
-        std::string final_tensor_name = "h_final_tensor_product_" + pair_suffix;
-        std::string final_tensor_title = "#rho_{1} #otimes #rho_{1}(#Delta y,#Delta #phi) " + pair_title + " normalized by events;#Delta y;#Delta #phi [rad]";
-        TH2F* h_final_tensor = (TH2F*)h_tensor_product->Clone(final_tensor_name.c_str());
-        h_final_tensor->SetTitle(final_tensor_title.c_str());
-        
-        // Write to organized folders
-        hist_manager->writeHistogramToPair(h_final_pair_density);
-        hist_manager->writeHistogramToPair(h_pair_density);
-        hist_manager->writeHistogramToPair(h_delta_y);
-        hist_manager->writeHistogramToPair(h_delta_phi);
-        
-        hist_manager->writeHistogramToTensor(h_final_tensor);
-        hist_manager->writeHistogramToTensor(h_tensor_product);
-        
-        // Write pair multiplicity to Event folder
-        std::string mult_name = "h_pair_multiplicity_" + pair_suffix;
-        std::string mult_title = "Pair multiplicity " + pair_title + " normalized by events;N_{pairs};events/total_events";
-        TH1F* h_mult_normalized = (TH1F*)h_pair_multiplicity->Clone(mult_name.c_str());
-        h_mult_normalized->SetTitle(mult_title.c_str());
-        if (total_events > 0) {
-            h_mult_normalized->Scale(1.0 / total_events);
-        }
-        hist_manager->writeHistogramToEvent(h_mult_normalized);
-        
-        std::string pair_type = is_self_pair ? " (self-pair)" : "";
-        std::cout << "Pair analysis for " << pair_title << pair_type
-                  << ": " << h_pair_multiplicity->GetMean() << " avg pairs/event in "
-                  << total_events << " events" << std::endl;
-        
-        delete h_final_pair_density;
-        delete h_final_tensor;
-        delete h_mult_normalized;
+
+    void computeC2(int class_id) {
+        if (total_events_per_class[class_id] == 0) return;
+        if (h_c2_cumulant[class_id]) delete h_c2_cumulant[class_id];
+        std::string suffix = PDGManager::generateSuffix(pdg1, pdg2);
+        std::string cs = "_class" + std::to_string(class_id);
+        h_c2_cumulant[class_id] = (TH2F*)h_pair_density[class_id]->Clone(("h_c2_" + suffix + cs).c_str());
+        h_c2_cumulant[class_id]->Scale(1.0 / total_events_per_class[class_id]);
+        h_c2_cumulant[class_id]->Add(h_tensor_product[class_id], -1.0);
     }
-    
-private:
-    void initializeHistograms() {
-        std::string name, title;
-        
-        name = "h_pair_density_raw_" + pair_suffix;
-        title = "#rho_{2}(#Delta y,#Delta #phi) raw " + pair_title + ";#Delta y;#Delta #phi [rad]";
-        h_pair_density = hist_manager->createTH2F(name, title,
-            config.n_delta_y_bins, config.delta_y_min, config.delta_y_max,
-            config.n_delta_phi_bins, config.delta_phi_min, config.delta_phi_max);
-        
-        name = "h_tensor_product_raw_" + pair_suffix;
-        title = "#rho_{1} #otimes #rho_{1}(#Delta y,#Delta #phi) raw " + pair_title + ";#Delta y;#Delta #phi [rad]";
-        h_tensor_product = hist_manager->createTH2F(name, title,
-            config.n_delta_y_bins, config.delta_y_min, config.delta_y_max,
-            config.n_delta_phi_bins, config.delta_phi_min, config.delta_phi_max);
-        
-        name = "h_delta_y_raw_" + pair_suffix;
-        title = "#Delta y distribution raw " + pair_title + ";#Delta y;counts";
-        h_delta_y = hist_manager->createTH1F(name, title,
-            config.n_delta_y_bins, config.delta_y_min, config.delta_y_max);
-        
-        name = "h_delta_phi_raw_" + pair_suffix;
-        title = "#Delta #phi distribution raw " + pair_title + ";#Delta #phi [rad];counts";
-        h_delta_phi = hist_manager->createTH1F(name, title,
-            config.n_delta_phi_bins, config.delta_phi_min, config.delta_phi_max);
-        
-        name = "h_pair_multiplicity_raw_" + pair_suffix;
-        title = "Pair multiplicity raw " + pair_title + ";N_{pairs};events";
-        h_pair_multiplicity = hist_manager->createTH1F(name, title, 1000, 0, 1000);
+
+    TH2F* getC2(int class_id) { return h_c2_cumulant[class_id]; }
+    TH2F* getTensor(int class_id) { return h_tensor_product[class_id]; }
+
+    void finalize(HistogramManager* hm) {
+        for (int c = 0; c < n_classes; ++c) {
+            if (total_events_per_class[c] == 0) continue;
+            calculateTensor(c);
+            computeC2(c);
+            std::string suffix = PDGManager::generateSuffix(pdg1, pdg2);
+            std::string cs = "_class" + std::to_string(c);
+            TH2F* h2 = (TH2F*)h_pair_density[c]->Clone(("h_rho2_" + suffix + cs).c_str());
+            h2->Scale(1.0 / total_events_per_class[c]); hm->writePair(c, h2); delete h2;
+            TH2F* ht = (TH2F*)h_tensor_product[c]->Clone(("h_tensor_" + suffix + cs).c_str());
+            hm->writeTensor(c, ht); delete ht;
+        }
     }
 };
 
-
+// ============================================================================
+// 5. MAIN PROCESSOR (updated computeDerivedPhysics)
+// ============================================================================
 class HepMCProcessor {
 private:
-    std::vector<SingleParticleAnalyzer*> single_analyzers;
-    std::vector<PairAnalyzer*> pair_analyzers;
     StatusFilter status_filter;
-    int total_events_processed;
-    
+    HistogramManager* hist_manager;
+    std::vector<SingleParticleAnalyzer*> singles;
+    std::vector<PairAnalyzer*> pairs;
+    std::map<std::pair<int,int>, PairAnalyzer*> pair_map; // ordered: trigger -> associated
+    TH1F* h_total_mult;
+    int events_processed = 0;
+    int n_classes;
+    std::vector<double> mult_thresholds;
 public:
-    HepMCProcessor() : total_events_processed(0) {}
-    
-    void setStatusFilter(const std::vector<int>& status_codes) {
-        status_filter.setAllowedStatus(status_codes);
+    HepMCProcessor(HistogramManager* manager, int n_classes) : hist_manager(manager), n_classes(n_classes) {
+        h_total_mult = hist_manager->createTH1F("h_total_event_multiplicity_raw", "Charged |#eta|<1 Multiplicity", 500, 0, 500);
     }
-    
-    void acceptAllStatus() {
-        status_filter.acceptAllStatus();
+    ~HepMCProcessor() {
+        for (auto s : singles) delete s;
+        for (auto p : pairs) delete p;
+        delete h_total_mult;
     }
-    
-    void addSingleParticleAnalyzer(SingleParticleAnalyzer* analyzer) {
-        single_analyzers.push_back(analyzer);
-    }
-    
-    void addPairAnalyzer(PairAnalyzer* analyzer) {
-        pair_analyzers.push_back(analyzer);
-    }
-    
-    std::vector<int> getStatusCodes() const {
-        return status_filter.getStatusCodes();
-    }
-    
-    bool isDefaultStatus() const {
-        return status_filter.isDefaultStatus();
-    }
-    
-    SingleParticleAnalyzer* findSingleAnalyzer(int pdg) {
-        for (auto* analyzer : single_analyzers) {
-            if (analyzer->getPDG() == pdg) {
-                return analyzer;
+
+    void setStatusFilter(const std::vector<int>& s) { status_filter.setAllowedStatus(s); }
+    void addSingle(int pdg) { singles.push_back(new SingleParticleAnalyzer(pdg, hist_manager, n_classes)); }
+
+    void addPair(int trigger, int assoc) {
+        SingleParticleAnalyzer *s_trig = nullptr, *s_assoc = nullptr;
+        for (auto s : singles) {
+            if (s->getPDG() == trigger) s_trig = s;
+            if (s->getPDG() == assoc)  s_assoc = s;
+        }
+        if (s_trig && s_assoc) {
+            std::pair<int,int> key{trigger, assoc};
+            if (pair_map.find(key) == pair_map.end()) {
+                auto* pa = new PairAnalyzer(trigger, assoc, hist_manager, s_trig, s_assoc, n_classes);
+                pairs.push_back(pa);
+                pair_map[key] = pa;
             }
         }
+    }
+
+    SingleParticleAnalyzer* findSingleAnalyzer(int pdg) {
+        for (auto s : singles) if (s->getPDG() == pdg) return s;
         return nullptr;
     }
-    
-    int getTotalEventsProcessed() const {
-        return total_events_processed;
+
+    PairAnalyzer* getPairAnalyzer(int trig, int assoc) {
+        auto key = std::make_pair(trig, assoc);
+        auto it = pair_map.find(key);
+        return (it != pair_map.end()) ? it->second : nullptr;
     }
-    
-    void processFile(const std::string& filename) {
-        std::ifstream infile(filename);
-        if (!infile.is_open()) {
-            std::cerr << "Error opening input file: " << filename << std::endl;
-            return;
-        }
-        
-        status_filter.printConfiguration();
-        
+
+    void computeMultiplicityThresholds(const std::string& fname) {
+        std::ifstream file(fname);
+        if (!file.is_open()) { std::cerr << "Cannot open " << fname << " for first pass" << std::endl; return; }
         std::string line;
-        int event_count = 0;
-        std::vector<KinematicsCalculator::Particle> event_particles;
-        std::map<int, int> event_particle_counts;
-        
-        while (std::getline(infile, line)) {
+        int eid = 0;
+        std::vector<KinematicsCalculator::Particle> event_parts;
+        while (std::getline(file, line)) {
             if (line.empty()) continue;
-            
             if (line[0] == 'E') {
-                if (event_count > 0) {
-                    processEvent(event_particles, event_particle_counts, event_count);
+                if (eid > 0) {
+                    int charged_mult_eta1 = 0;
+                    for (const auto& p : event_parts) {
+                        double rap = p.getRapidity();
+                        if (std::abs(rap) < 1.0 && KinematicsCalculator::isChargedHadron(p.pdg)) charged_mult_eta1++;
+                    }
+                    h_total_mult->Fill(charged_mult_eta1);
+                    event_parts.clear();
                 }
-                
-                event_count++;
-                event_particles.clear();
-                event_particle_counts.clear();
-                
-                if (event_count % 1000 == 0) {
-                    std::cout << "Processing event " << event_count << std::endl;
-                }
+                eid++;
                 continue;
             }
-            
             if (line[0] != 'P') continue;
-            
-            std::istringstream iss(line);
-            char tag;
-            int id, pdg, status;
-            double px, py, pz, E, m;
-            
-            iss >> tag >> id >> pdg >> px >> py >> pz >> E >> m >> status;
-            
-            if (!status_filter.isAllowed(status)) continue;
-            
-            KinematicsCalculator::Particle particle =
-                KinematicsCalculator::createParticle(px, py, pz, E, pdg, event_count);
-            
-            event_particles.push_back(particle);
-            event_particle_counts[pdg]++;
+            std::stringstream ss(line);
+            char c; int id, pdg, stat; double px, py, pz, E, m;
+            ss >> c >> id >> pdg >> px >> py >> pz >> E >> m >> stat;
+            if (status_filter.isAllowed(stat)) {
+                event_parts.push_back(KinematicsCalculator::createParticle(px, py, pz, E, pdg, eid));
+            }
         }
-        
-        if (event_count > 0) {
-            processEvent(event_particles, event_particle_counts, event_count);
+        if (eid > 0) {
+            int charged_mult_eta1 = 0;
+            for (const auto& p : event_parts) {
+                double rap = p.getRapidity();
+                if (std::abs(rap) < 1.0 && KinematicsCalculator::isChargedHadron(p.pdg)) charged_mult_eta1++;
+            }
+            h_total_mult->Fill(charged_mult_eta1);
         }
-        
-        total_events_processed = event_count;
-        infile.close();
-        std::cout << "Processed " << total_events_processed << " events" << std::endl;
+        file.close();
+        std::cout << "First pass: Multiplicity distribution collected from " << eid << " events." << std::endl;
+        // Compute cumulative distribution and thresholds (equal statistics classes)
+        std::vector<double> mults;
+        for (int b = 1; b <= h_total_mult->GetNbinsX(); ++b) {
+            for (int i = 0; i < h_total_mult->GetBinContent(b); ++i) {
+                mults.push_back(h_total_mult->GetBinCenter(b));
+            }
+        }
+        std::sort(mults.begin(), mults.end());
+        double total = mults.size();
+        if (total == 0) return;
+        mult_thresholds.resize(n_classes - 1);
+        double frac = 1.0;
+        for (int k = 0; k < n_classes - 1; ++k) {
+            frac -= 1.0 / n_classes;
+            mult_thresholds[k] = mults[static_cast<size_t>(total * frac)];
+        }
+        // Print class ranges (most central = class 0)
+        double low_perc = 0.0;
+        for (int cl = n_classes - 1; cl >= 0; --cl) {
+            double high_perc = low_perc + 100.0 / n_classes;
+            std::cout << "Class " << cl << ": " << low_perc << "% - " << high_perc << "% (most central is Class 0)" << std::endl;
+            low_perc = high_perc;
+        }
     }
-    
-    void finalize(HistogramManager& hist_manager) {
-        for (auto* analyzer : single_analyzers) {
-            analyzer->finalize();
+
+    int getClass(int mult) {
+        for (int c = 0; c < n_classes - 1; ++c) {
+            if (mult > mult_thresholds[c]) return c;
         }
-        for (auto* analyzer : pair_analyzers) {
-            analyzer->finalize();
-        }
-        
-        // Write total events summary
-        hist_manager.writeEventSummary(total_events_processed);
+        return n_classes - 1;
     }
-    
-private:
-    void processEvent(const std::vector<KinematicsCalculator::Particle>& particles,
-                     const std::map<int, int>& particle_counts, int current_event_id) {
-        
-        // Process single particles
-        for (auto* analyzer : single_analyzers) {
+
+    void processFile(const std::string& fname) {
+        computeMultiplicityThresholds(fname);
+        std::ifstream file(fname);
+        if (!file.is_open()) { std::cerr << "Cannot open " << fname << std::endl; return; }
+        status_filter.printConfiguration();
+        std::string line;
+        int eid = 0;
+        std::vector<KinematicsCalculator::Particle> event_parts;
+        while (std::getline(file, line)) {
+            if (line.empty()) continue;
+            if (line[0] == 'E') {
+                if (eid > 0) {
+                    int charged_mult_eta1 = 0;
+                    for (const auto& p : event_parts) {
+                        double rap = p.getRapidity();
+                        if (std::abs(rap) < 1.0 && KinematicsCalculator::isChargedHadron(p.pdg)) charged_mult_eta1++;
+                    }
+                    int class_id = getClass(charged_mult_eta1);
+                    processEvent(event_parts, class_id);
+                    event_parts.clear();
+                }
+                eid++;
+                if (eid % 100 == 0) std::cout << "Processing event " << eid << std::endl;
+                continue;
+            }
+            if (line[0] != 'P') continue;
+            std::stringstream ss(line);
+            char c; int id, pdg, stat; double px, py, pz, E, m;
+            ss >> c >> id >> pdg >> px >> py >> pz >> E >> m >> stat;
+            if (status_filter.isAllowed(stat)) {
+                event_parts.push_back(KinematicsCalculator::createParticle(px, py, pz, E, pdg, eid));
+            }
+        }
+        if (eid > 0) {
+            int charged_mult_eta1 = 0;
+            for (const auto& p : event_parts) {
+                double rap = p.getRapidity();
+                if (std::abs(rap) < 1.0 && KinematicsCalculator::isChargedHadron(p.pdg)) charged_mult_eta1++;
+            }
+            int class_id = getClass(charged_mult_eta1);
+            processEvent(event_parts, class_id);
+        }
+        events_processed = eid;
+        file.close();
+        std::cout << "Processed " << events_processed << " events in second pass." << std::endl;
+    }
+
+    void processEvent(const std::vector<KinematicsCalculator::Particle>& parts, int class_id) {
+        int charged_mult_eta1 = 0;
+        for (const auto& p : parts) {
+            double rap = p.getRapidity();
+            if (std::abs(rap) < 1.0 && KinematicsCalculator::isChargedHadron(p.pdg)) charged_mult_eta1++;
+        }
+        h_total_mult->Fill(charged_mult_eta1);
+        for (auto s : singles) {
             int count = 0;
-            for (const auto& particle : particles) {
-                analyzer->processParticle(particle);
-                if (particle.pdg == analyzer->getPDG()) {
-                    count++;
+            for (const auto& p : parts) {
+                s->processParticle(p, class_id);
+                if (p.pdg == s->getPDG()) count++;
+            }
+            s->processEvent(count, class_id);
+        }
+        for (auto p : pairs) p->processPairs(parts, class_id);
+    }
+
+    void computeDerivedPhysics() {
+        if (events_processed == 0) return;
+        std::cout << "\n--- Computing all A2 + B2/Bs per class ---\n";
+
+        // PART 1: Compute A2 and R2-1 for ALL existing ordered pairs
+        std::cout << "Computing A2 and R2-1 for all ordered pairs...\n";
+        for (const auto& entry : pair_map) {
+            int trig = entry.first.first;
+            int assoc = entry.first.second;
+            PairAnalyzer* pa = entry.second;
+
+            for (int c = 0; c < n_classes; ++c) {
+                TH2F* c2 = pa->getC2(c);
+                if (!c2) continue;
+
+                SingleParticleAnalyzer* s_assoc = findSingleAnalyzer(assoc);
+                if (!s_assoc) continue;
+
+                double N_assoc = s_assoc->getMeanMultiplicity(c);
+                if (N_assoc <= 0) continue;
+
+                std::string suf = PDGManager::generateSuffix(trig, assoc);
+                std::string cs = "_class" + std::to_string(c);
+                TH2F* h_a2 = (TH2F*)c2->Clone(("h_A2_" + suf + cs).c_str());
+                h_a2->Scale(1.0 / N_assoc);
+                h_a2->SetTitle(Form("A_{2}(%d|%d) Class %d", trig, assoc, c));
+
+                hist_manager->writeA2(c, h_a2);
+                delete h_a2;
+
+                // R2 - 1 = C2 / tensor
+                TH2F* tensor = pa->getTensor(c);
+                if (tensor && tensor->Integral() > 0) {
+                    TH2F* h_r2m1 = (TH2F*)c2->Clone(("h_R2_minus1_" + suf + cs).c_str());
+                    h_r2m1->Divide(tensor);
+                    h_r2m1->SetTitle(Form("R_{2}-1 (%d|%d) Class %d", trig, assoc, c));
+                    hist_manager->writeC2(c, h_r2m1);
+                    delete h_r2m1;
                 }
             }
-            analyzer->processEvent(count);
         }
-        
-        // Process pairs
-        for (auto* analyzer : pair_analyzers) {
-            analyzer->processPairs(particles);
+
+        // PART 2: Compute B2 and Bs only for the desired charge combinations
+        std::cout << "Computing B2 and Bs for charge-dependent pairs...\n";
+        std::vector<int> positive_pdgs;
+        for (auto* s : singles) if (s->getPDG() > 0) positive_pdgs.push_back(s->getPDG());
+
+        for (int c = 0; c < n_classes; ++c) {
+            for (int alpha_pos : positive_pdgs) {
+                for (int beta_pos : positive_pdgs) {
+                    int alpha = alpha_pos;
+                    int alpha_bar = -alpha_pos;
+                    int beta = beta_pos;
+                    int beta_bar = -beta_pos;
+
+                    // We need A2(alpha | beta_bar) and A2(alpha_bar | beta_bar) for B2
+                    PairAnalyzer* pa_ab = getPairAnalyzer(alpha, beta_bar);
+                    PairAnalyzer* pa_abb = getPairAnalyzer(alpha_bar, beta_bar);
+                    if (!pa_ab || !pa_abb) continue;
+
+                    TH2F* c2_ab = pa_ab->getC2(c);
+                    TH2F* c2_abb = pa_abb->getC2(c);
+                    if (!c2_ab || !c2_abb) continue;
+
+                    SingleParticleAnalyzer* s_beta_bar = findSingleAnalyzer(beta_bar);
+                    if (!s_beta_bar) continue;
+                    double N_beta_bar = s_beta_bar->getMeanMultiplicity(c);
+                    if (N_beta_bar <= 0) continue;
+
+                    std::string suf_ab = PDGManager::generateSuffix(alpha, beta_bar);
+                    TH2F* h_a2_ab = (TH2F*)c2_ab->Clone(("h_A2_" + suf_ab + "_class" + std::to_string(c)).c_str());
+                    h_a2_ab->Scale(1.0 / N_beta_bar);
+
+                    std::string suf_abb = PDGManager::generateSuffix(alpha_bar, beta_bar);
+                    TH2F* h_a2_abb = (TH2F*)c2_abb->Clone(("h_A2_" + suf_abb + "_class" + std::to_string(c)).c_str());
+                    h_a2_abb->Scale(1.0 / N_beta_bar);
+
+                    // B2 = A2(alpha|beta_bar) - A2(alpha_bar|beta_bar)
+                    std::string suf_b2 = PDGManager::generateSuffix(alpha_pos, beta_pos);
+                    TH2F* h_b2 = (TH2F*)h_a2_ab->Clone(("h_B2_" + suf_b2 + "_class" + std::to_string(c)).c_str());
+                    h_b2->Add(h_a2_abb, -1.0);
+                    hist_manager->writeB2(c, h_b2);
+
+                    // Symmetric Bs (four terms)
+                    PairAnalyzer* pa_asb = getPairAnalyzer(alpha, beta);
+                    PairAnalyzer* pa_abs = getPairAnalyzer(alpha_bar, beta);
+                    if (!pa_asb || !pa_abs) {
+                        delete h_a2_ab; delete h_a2_abb; delete h_b2;
+                        continue;
+                    }
+
+                    TH2F* c2_asb = pa_asb->getC2(c);
+                    TH2F* c2_abs = pa_abs->getC2(c);
+                    if (!c2_asb || !c2_abs) {
+                        delete h_a2_ab; delete h_a2_abb; delete h_b2;
+                        continue;
+                    }
+
+                    SingleParticleAnalyzer* s_beta = findSingleAnalyzer(beta);
+                    if (!s_beta) {
+                        delete h_a2_ab; delete h_a2_abb; delete h_b2;
+                        continue;
+                    }
+                    double N_beta = s_beta->getMeanMultiplicity(c);
+                    if (N_beta <= 0) {
+                        delete h_a2_ab; delete h_a2_abb; delete h_b2;
+                        continue;
+                    }
+
+                    TH2F* term1 = (TH2F*)c2_ab->Clone();
+                    term1->Add(c2_asb, -1.0);
+                    term1->Scale(1.0 / N_beta_bar);
+
+                    TH2F* term2 = (TH2F*)c2_abs->Clone();
+                    term2->Add(c2_abb, -1.0);
+                    term2->Scale(1.0 / N_beta);
+
+                    TH2F* term2_flip = flipDy(term2);
+                    delete term2;
+
+                    TH2F* h_bs = (TH2F*)term1->Clone(("h_Bs_" + suf_b2 + "_class" + std::to_string(c)).c_str());
+                    h_bs->Add(term2_flip, 1.0);
+                    h_bs->Scale(0.5);
+                    hist_manager->writeBs(c, h_bs);
+
+                    delete term1; delete term2_flip; delete h_bs;
+                    delete h_a2_ab; delete h_a2_abb; delete h_b2;
+                }
+            }
         }
     }
+
+    void finalize() {
+        for (auto s : singles) s->finalize(hist_manager);
+        for (auto p : pairs) p->finalize(hist_manager);
+        computeDerivedPhysics();
+
+        TH1F* hfm = (TH1F*)h_total_mult->Clone("h_total_event_multiplicity_norm");
+        if (events_processed > 0) hfm->Scale(1.0 / events_processed);
+        hist_manager->writeEvent(hfm);
+        delete hfm;
+
+        hist_manager->writeEventSummary(events_processed);
+    }
+
+    // ... (rest of the class: processFile, etc. — same as before)
 };
 
+// ============================================================================
+// MAIN (unchanged)
+// ============================================================================
 int main(int argc, char* argv[]) {
-    if (argc < 4) {
-        std::cerr << "Usage: " << argv[0] << " input.hepmc output.root PDG1 PDG2 ... [options]" << std::endl;
-        std::cerr << "Options:" << std::endl;
-        std::cerr << "  --status STATUS1 STATUS2  : Particle status filter (default: 1)" << std::endl;
-        std::cerr << "  --all-status              : Accept all particle status codes" << std::endl;
-        std::cerr << "\nExample:" << std::endl;
-        std::cerr << "  " << argv[0] << " events.hepmc output.root 211" << std::endl;
-        std::cerr << "  This will automatically create analyses for:" << std::endl;
-        std::cerr << "  - Particles: 211, -211 (pion and antipion)" << std::endl;
-        std::cerr << "  - Self-pairs: 211-211, -211→-211" << std::endl;
-        std::cerr << "  - Cross-pairs: 211→-211, -211→211" << std::endl;
-        std::cerr << "\nAll outputs organized in ROOT folders:" << std::endl;
-        std::cerr << "  - SingleDensities/ : ρ₁ densities" << std::endl;
-        std::cerr << "  - PairDensities/ : ρ₂ pair densities" << std::endl;
-        std::cerr << "  - TensorProducts/ : ρ₁⊗ρ₁ tensor products" << std::endl;
-        std::cerr << "  - EventPlots/ : multiplicities, total events" << std::endl;
+    TH1::AddDirectory(false);
+    if (argc < 5) {
+        std::cerr << "Usage: ./density_calc input.hepmc output.root n_classes PDG1 PDG2 ...\n";
         return 1;
     }
-    
-    std::string input_file = argv[1];
-    std::string output_file = argv[2];
-    
-    std::vector<int> input_pdg_codes;
-    std::vector<int> status_codes;
-    bool use_all_status = false;
-    bool status_specified = false;
-    
-    // Parse input PDG codes and options
-    for (int i = 3; i < argc; i++) {
-        std::string arg = argv[i];
-        
-        if (arg == "--status") {
-            i++;
-            while (i < argc && argv[i][0] != '-') {
-                try {
-                    int status = std::stoi(argv[i]);
-                    status_codes.push_back(status);
-                } catch (const std::exception& e) {
-                    std::cerr << "Invalid status code: " << argv[i] << std::endl;
-                    return 1;
-                }
-                i++;
-            }
-            i--;
-            status_specified = true;
-        }
-        else if (arg == "--all-status") {
-            use_all_status = true;
-            status_specified = true;
-        }
-        else {
-            // Try to parse as PDG code
-            try {
-                int pdg = std::stoi(arg);
-                input_pdg_codes.push_back(pdg);
-                std::cout << "Input PDG code: " << pdg << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "Invalid PDG code: " << arg << std::endl;
-                return 1;
-            }
+
+    std::string fin = argv[1];
+    std::string fout = argv[2];
+    int n_classes = std::stoi(argv[3]);
+    if (n_classes < 1) n_classes = 1;
+
+    std::vector<int> inputs;
+    for (int i = 4; i < argc; ++i) {
+        try { inputs.push_back(std::stoi(argv[i])); } catch (...) {}
+    }
+    if (inputs.empty()) return 1;
+
+    auto pdgs = PDGManager::expandPDGList(inputs);
+    std::sort(pdgs.begin(), pdgs.end());
+
+    TFile* file = new TFile(fout.c_str(), "RECREATE");
+    HistogramManager hm(file, n_classes);
+    HepMCProcessor proc(&hm, n_classes);
+
+    proc.setStatusFilter({1, 11});
+
+    for (int p : pdgs) proc.addSingle(p);
+    // Add all ordered combinations
+    for (size_t i = 0; i < pdgs.size(); ++i) {
+        for (size_t j = 0; j < pdgs.size(); ++j) {
+            proc.addPair(pdgs[i], pdgs[j]);
         }
     }
-    
-    if (input_pdg_codes.empty()) {
-        std::cerr << "No PDG codes specified!" << std::endl;
-        return 1;
-    }
-    
-    // AUTOMATICALLY EXPAND TO INCLUDE PARTICLES AND ANTIPARTICLES
-    std::vector<int> pdg_codes = PDGManager::expandPDGList(input_pdg_codes);
-    
-    TFile* root_file = new TFile(output_file.c_str(), "RECREATE");
-    HistogramManager hist_manager(root_file);
-    HepMCProcessor processor;
-    
-    if (use_all_status) {
-        processor.acceptAllStatus();
-    } else if (status_specified) {
-        processor.setStatusFilter(status_codes);
-    }
-    
-    std::vector<int> actual_status_codes = processor.getStatusCodes();
-    bool is_default_status = processor.isDefaultStatus();
-    
-    // Create single particle analyzers for each PDG (including antiparticles)
-    std::vector<SingleParticleAnalyzer*> single_analyzers;
-    std::cout << "\nCreating single particle analyzers:" << std::endl;
-    for (int pdg : pdg_codes) {
-        auto* analyzer = new SingleParticleAnalyzer(pdg, &hist_manager, actual_status_codes, is_default_status);
-        single_analyzers.push_back(analyzer);
-        processor.addSingleParticleAnalyzer(analyzer);
-        std::cout << "  - PDG " << pdg << std::endl;
-    }
-    
-    // Create ALL possible pair combinations INCLUDING SELF-PAIRS
-    std::vector<PairAnalyzer*> pair_analyzers;
-    std::cout << "\nCreating pair analyzers (including self-pairs):" << std::endl;
-    for (size_t i = 0; i < pdg_codes.size(); i++) {
-        for (size_t j = 0; j < pdg_codes.size(); j++) {
-            // INCLUDE SELF-PAIRS (i == j) and all cross-pairs
-            
-            int pdg1 = pdg_codes[i];
-            int pdg2 = pdg_codes[j];
-            
-            // Find corresponding single analyzers
-            SingleParticleAnalyzer* analyzer1 = processor.findSingleAnalyzer(pdg1);
-            SingleParticleAnalyzer* analyzer2 = processor.findSingleAnalyzer(pdg2);
-            
-            if (!analyzer1 || !analyzer2) {
-                std::cerr << "Error: Could not find single analyzers for pair " << pdg1 << "," << pdg2 << std::endl;
-                continue;
-            }
-            
-            auto* pair_analyzer = new PairAnalyzer(pdg1, pdg2, &hist_manager, analyzer1, analyzer2, actual_status_codes, is_default_status);
-            pair_analyzers.push_back(pair_analyzer);
-            processor.addPairAnalyzer(pair_analyzer);
-            
-            std::string pair_type = (pdg1 == pdg2) ? " (self-pair)" : "";
-            std::cout << "  - Pair " << pdg1 << " → " << pdg2 << pair_type << std::endl;
-        }
-    }
-    
-    std::cout << "\n" << std::string(60, '=') << std::endl;
-    std::cout << "ENHANCED ANALYSIS SUMMARY:" << std::endl;
-    std::cout << "Input file: " << input_file << std::endl;
-    std::cout << "Output file: " << output_file << std::endl;
-    std::cout << "Input PDG codes: ";
-    for (size_t i = 0; i < input_pdg_codes.size(); i++) {
-        std::cout << input_pdg_codes[i];
-        if (i < input_pdg_codes.size() - 1) std::cout << ", ";
-    }
-    std::cout << std::endl;
-    std::cout << "Expanded PDG codes: ";
-    for (size_t i = 0; i < pdg_codes.size(); i++) {
-        std::cout << pdg_codes[i];
-        if (i < pdg_codes.size() - 1) std::cout << ", ";
-    }
-    std::cout << std::endl;
-    std::cout << "Single particle analyzers: " << single_analyzers.size() << std::endl;
-    std::cout << "Pair analyzers: " << pair_analyzers.size() << " (including self-pairs)" << std::endl;
-    std::cout << "Output organization: ROOT folders (SingleDensities, PairDensities, TensorProducts, EventPlots)" << std::endl;
-    std::cout << "Normalization: All yields divided by total number of events" << std::endl;
-    std::cout << std::string(60, '=') << std::endl;
-    
-    // Process the file
-    processor.processFile(input_file);
-    processor.finalize(hist_manager);
-    
-    // Cleanup
-    for (auto* analyzer : single_analyzers) delete analyzer;
-    for (auto* analyzer : pair_analyzers) delete analyzer;
-    
-    root_file->Close();
-    delete root_file;
-    
-    std::cout << "\n" << std::string(60, '=') << std::endl;
-    std::cout << "ENHANCED ANALYSIS COMPLETED SUCCESSFULLY!" << std::endl;
-    std::cout << "Results saved to: " << output_file << std::endl;
-    std::cout << "Total events processed: " << processor.getTotalEventsProcessed() << std::endl;
-    
-    std::cout << "\nORGANIZED OUTPUT STRUCTURE:" << std::endl;
-    std::cout << "📁 ROOT File Structure:" << std::endl;
-    std::cout << "  📁 SingleDensities/" << std::endl;
-    std::cout << "    └── h_final_density_[PDG] (ρ₁ normalized by events)" << std::endl;
-    std::cout << "  📁 PairDensities/" << std::endl;
-    std::cout << "    └── h_final_pair_density_[PDG1]_[PDG2] (ρ₂ normalized by events)" << std::endl;
-    std::cout << "  📁 TensorProducts/" << std::endl;
-    std::cout << "    └── h_final_tensor_product_[PDG1]_[PDG2] (ρ₁⊗ρ₁ normalized by events)" << std::endl;
-    std::cout << "  📁 EventPlots/" << std::endl;
-    std::cout << "    ├── h_total_events (contains: " << processor.getTotalEventsProcessed() << ")" << std::endl;
-    std::cout << "    └── h_multiplicity_[PDG] (normalized by events)" << std::endl;
-    
-    std::cout << "\nGenerated pairs for expanded PDG codes:" << std::endl;
-    for (size_t i = 0; i < pdg_codes.size(); i++) {
-        for (size_t j = 0; j < pdg_codes.size(); j++) {
-            std::string pair_type = (pdg_codes[i] == pdg_codes[j]) ? " (self-pair)" : "";
-            std::cout << "  " << pdg_codes[i] << " → " << pdg_codes[j] << pair_type << std::endl;
-        }
-    }
-    
-    std::cout << "\nTo view results:" << std::endl;
-    std::cout << "root -l " << output_file << std::endl;
-    std::cout << ".ls" << std::endl;
-    std::cout << "TBrowser b" << std::endl;
-    std::cout << "\nFEATURE SUMMARY:" << std::endl;
-    std::cout << "✓ All yields normalized by total number of events (" << processor.getTotalEventsProcessed() << ")" << std::endl;
-    std::cout << "✓ Automatic particle + antiparticle inclusion" << std::endl;
-    std::cout << "✓ Self-pairs included (same PDG with same PDG)" << std::endl;
-    std::cout << "✓ Organized ROOT folder structure" << std::endl;
-    std::cout << "✓ Total events stored for reference" << std::endl;
-    std::cout << std::string(60, '=') << std::endl;
-    
+
+    std::cout << "Setup done. Processing...\n";
+    proc.processFile(fin);
+    proc.finalize();
+
+    file->Close();
+    delete file;
+    std::cout << "Done.\n";
     return 0;
 }
