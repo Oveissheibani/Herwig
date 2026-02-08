@@ -26,7 +26,7 @@ const int NPHI_BINS = 64;
 const double PHI_MIN = -TMath::Pi();
 const double PHI_MAX = TMath::Pi();
 const double BIN_WIDTH_PHI = (PHI_MAX - PHI_MIN) / NPHI_BINS;
-const int TENSOR_SAMPLES = 200;
+const int TENSOR_SAMPLES = 1000;
 const double BIN_AREA = BIN_WIDTH_Y * BIN_WIDTH_PHI;
 
 // ============================================================================
@@ -315,7 +315,8 @@ public:
 
             std::string tensor_name = "h_tensor_" + suffix + cs;
             TH2F* ht = (TH2F*) h_tensor_product[c]->Clone(tensor_name.c_str());
-            ht->Scale(1.0 / total_events_per_class[c] / BIN_AREA);
+          //  ht->Scale(1.0 / total_events_per_class[c] / BIN_AREA);
+          ht->Scale(1.0 / BIN_AREA);
             hm->writeTensor(c, ht); delete ht;
         }
     }
@@ -541,7 +542,8 @@ int main(int argc, char* argv[]) {
     TFile* file = new TFile(fout.c_str(), "RECREATE");
     HistogramManager hm(file, n_classes);
     HepMCProcessor proc(&hm, n_classes);
-    proc.setStatusFilter({1, 11});
+   //proc.setStatusFilter({1, 11});
+   proc.setStatusFilter({1});
     for (int p : pdgs) proc.addSingle(p);
     for (size_t i = 0; i < pdgs.size(); ++i) {
         for (size_t j = 0; j < pdgs.size(); ++j) {
